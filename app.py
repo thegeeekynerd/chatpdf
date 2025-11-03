@@ -1,101 +1,107 @@
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import os
-import google.generativeai as genai
-
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain.vectorstores import FAISS
-from langchain.chains.question_answering import load_qa_chain
-from langchain.prompts import PromptTemplate
-
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
 from dotenv import load_dotenv
+import os
+
 load_dotenv()
 
-# Configure API Key
+# Configure Gemini API
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Correct Embedding Model
-embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-
+# ---------------------- EXTRACT TEXT ----------------------
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
         pdf_reader = PdfReader(pdf)
         for page in pdf_reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text
+            txt = page.extract_text()
+            if txt:
+                text += txt
     return text
 
-
+# ---------------------- CHUNK TEXT ----------------------
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150,
-        length_function=len
+        chunk_size=2000,
+        chunk_overlap=200
     )
     chunks = text_splitter.split_text(text)
     return chunks
 
-
+# ---------------------- VECTOR STORE ----------------------
 def get_vector_store(text_chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-004"   # ✅ Best Gemini embedding model
+    )
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
 
+# ---------------------- GEMINI ANSWER ----------------------
+def answer_question_with_gemini(context, question):
+    prompt = f"""
+You are an AI assistant. Answer the question using **only** the given context.
+If the answer is not found, reply: "I cannot find the answer in the provided PDF."
 
-def get_conversational_chain():
-    prompt_template = """
-    Answer the question using the provided context.
-    If the answer is not in the context, say: "The answer is not available in the provided documents."
+Context:
+{context}
 
-    Context:
-    {context}
+Question:
+{question}
 
-    Question:
-    {question}
+Answer:
+"""
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    response = model.generate_content(prompt)
+    return response.text
 
-    Answer:
-    """
-
-    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
-
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-    return chain
-
-
+# ---------------------- HANDLE USER QUERY ----------------------
 def user_input(user_question):
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question, k=4)
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-004")
 
-    chain = get_conversational_chain()
+    new_db = FAISS.load_local("faiss_index", embeddings)
+    docs = new_db.similarity_search(user_question)
 
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+    context = "\n\n".join([d.page_content for d in docs])
 
-    st.write("### 💬 Answer:")
-    st.write(response["output_text"])
+    answer = answer_question_with_gemini(context, user_question)
 
+    st.write("### ✅ Answer:")
+    st.write(answer)
 
+    # Optional: Show sources (very good for AI Engineer interviews)
+    with st.expander("📌 Show Retrieved Context"):
+        for i, doc in enumerate(docs):
+            st.write(f"**Chunk {i+1}:**")
+            st.write(doc.page_content)
+            st.write("---")
+
+# ---------------------- UI ----------------------
 def main():
-    st.set_page_config("ChatPDF")
-    st.title("📚 Chat with PDF using Gemini AI")
+    st.set_page_config("ChatPDF - AI RAG Demo")
+    st.header("💬 Chat with Your PDF (Gemini RAG)")
 
-    user_question = st.text_input("Ask a question from your PDF")
+    user_question = st.text_input("Ask something from your PDFs")
 
     if user_question:
         user_input(user_question)
 
     with st.sidebar:
-        st.header("Upload & Process")
+        st.title("📂 PDF Upload")
         pdf_docs = st.file_uploader("Upload PDF files", accept_multiple_files=True)
 
         if st.button("Submit & Process"):
-            with st.spinner("Reading & Indexing Documents..."):
-                raw_text = get_pdf_text(pdf_docs)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("✅ Processing Completed! You can now ask questions.")
+            with st.spinner("Processing PDFs..."):
+                if pdf_docs:
+                    raw_text = get_pdf_text(pdf_docs)
+                    chunks = get_text_chunks(raw_text)
+                    get_vector_store(chunks)
+                    st.success("✅ Vector Store Created!")
+                else:
+                    st.error("Please upload at least one PDF.")
 
 if __name__ == "__main__":
     main()

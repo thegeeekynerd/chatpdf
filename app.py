@@ -34,9 +34,7 @@ def get_text_chunks(text):
 
 # ---------------------- VECTOR STORE ----------------------
 def get_vector_store(text_chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/embedding-004"   # ✅ Best Gemini embedding model
-    )
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
 
@@ -60,7 +58,7 @@ Answer:
 
 # ---------------------- HANDLE USER QUERY ----------------------
 def user_input(user_question):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-004")
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
 
     new_db = FAISS.load_local("faiss_index", embeddings)
     docs = new_db.similarity_search(user_question)
@@ -72,12 +70,12 @@ def user_input(user_question):
     st.write("### ✅ Answer:")
     st.write(answer)
 
-    # Optional: Show sources (very good for AI Engineer interviews)
     with st.expander("📌 Show Retrieved Context"):
         for i, doc in enumerate(docs):
             st.write(f"**Chunk {i+1}:**")
             st.write(doc.page_content)
             st.write("---")
+
 
 # ---------------------- UI ----------------------
 def main():
